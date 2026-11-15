@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Kindle Tradutor – opções</title>
+  <style>
+    body { font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #222; max-width: 640px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 22px; margin-bottom: 4px; }
+    p.lead { color: #666; margin-top: 0; }
+    label { display: block; margin-top: 18px; font-weight: 600; }
+    small { display: block; color: #777; font-weight: 400; }
+    input[type=text], input[type=url], input[type=number], select { width: 100%; padding: 8px; font-size: 15px; margin-top: 4px; border: 1px solid #bbb; border-radius: 4px; }
+    .row { display: flex; gap: 16px; align-items: center; margin-top: 6px; }
+    .row label { margin: 0; font-weight: 400; }
+    button { margin-top: 22px; padding: 10px 18px; font-size: 15px; background: #1f8bb8; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+    #status { margin-left: 12px; color: #2a7; }
+    .box { background: #f4f8fa; border: 1px solid #d8e6ec; border-radius: 6px; padding: 12px 14px; margin-top: 24px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Kindle Tradutor</h1>
+  <p class="lead">Traduções feitas pelo ChatGPT na sua própria conta, pela página do ChatGPT (sem chave de API).</p>
+
+  <form id="form">
+    <label>Idioma de destino
+      <input type="text" id="targetLanguage" placeholder="Português (Brasil)">
+    </label>
+
+    <label>Como disparar a tradução</label>
+    <div class="row">
+      <label><input type="radio" name="trigger" value="button" id="triggerButton"> Mostrar o botão “Traduzir” ao selecionar</label>
+      <label><input type="radio" name="trigger" value="auto" id="triggerAuto"> Traduzir automaticamente ao selecionar</label>
+    </div>
+
+    <label><input type="checkbox" id="includeNote"> Pedir nota explicativa sobre expressões e gírias</label>
+
+    <label>Idioma da voz (botão de ouvir)
+      <select id="speechLang">
+        <option value="en-US">Inglês (EUA)</option>
+        <option value="en-GB">Inglês (Reino Unido)</option>
+        <option value="es-ES">Espanhol</option>
+        <option value="fr-FR">Francês</option>
+        <option value="de-DE">Alemão</option>
+        <option value="it-IT">Italiano</option>
+        <option value="ja-JP">Japonês</option>
+      </select>
+    </label>
+
+    <label>URL do ChatGPT
+      <small>Padrão: chat temporário, para não poluir seu histórico. Troque para https://chatgpt.com/ se quiser guardar as conversas.</small>
+      <input type="url" id="chatgptUrl" placeholder="https://chatgpt.com/?temporary-chat=true">
+    </label>
+
+    <label>Tempo máximo de espera pela resposta (segundos)
+      <input type="number" id="responseTimeout" min="15" max="600" step="5">
+    </label>
+
+    <label>Tamanho máximo da seleção (caracteres)
+      <input type="number" id="maxSelectionChars" min="50" max="10000" step="50">
+    </label>
+
+    <button type="submit" id="save">Salvar</button><span id="status" role="status"></span>
+  </form>
+
+  <div class="box">
+    <strong>Como usar:</strong> abra um livro no Kindle Web (read.amazon.com ou ler.amazon.com.br), selecione um trecho e clique em “Traduzir” (ou use Alt+T, ou o menu do botão direito).
+    A extensão abre uma aba do ChatGPT em segundo plano usando a sua sessão; mantenha-se logado nela.
+  </div>
+  <script src="../src/shared/core.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

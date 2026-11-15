@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ChatGPT (mock)</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+  main { flex: 1; overflow: auto; padding: 16px; }
+  article { margin: 8px 0; padding: 8px; border: 1px solid #eee; border-radius: 8px; }
+  form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #ddd; }
+  #prompt-textarea { flex: 1; min-height: 40px; border: 1px solid #aaa; border-radius: 8px; padding: 8px; white-space: pre-wrap; }
+  button { padding: 8px 14px; }
+</style>
+</head>
+<body>
+<main id="thread"></main>
+<div id="composer"></div>
+<script>
+(function () {
+  const params = new URLSearchParams(location.search);
+  const mode = params.get('mode') || 'json';
+  const delay = Number(params.get('delay') || 600);
+  window.__mock = { mode, sentPrompts: [], assistantReplies: [] };
+
+  // Dicionário determinístico para as asserções do teste.
+  const DICT = {
+    'i have no idea.': { translation: 'Não faço ideia.', chunks: [['I have', 'Eu não tenho'], ['no idea', 'ideia nenhuma']], note: '' },
+    'i have no idea': { translation: 'Não faço ideia', chunks: [['I have', 'Eu não tenho'], ['no idea', 'ideia nenhuma']], note: '' },
+    'on the table': { translation: 'em pauta', chunks: [['on the table', 'em pauta']], note: 'Literalmente "em cima da mesa", essa expressão pode se referir a um assunto que ainda está sendo discutido.' },
+    'nor was it a disease either': { translation: 'nem tampouco era uma doença', chunks: [['nor... either', 'nem... tampouco'], ['was it', 'era'], ['a disease', 'uma doença']], note: '' },
+    'to begin with': { translation: 'para começo de conversa', chunks: [['to begin with', 'para começo de conversa']], note: 'Esta expressão fixa indica o ponto ou motivo mais importante de um assunto.' },
+    'watch out for that one, though.': { translation: 'Mas tome cuidado com aquela ali.', chunks: [['Watch out for', 'Tome cuidado com'], ['that one', 'aquela ali'], ['though', 'mas / porém']], note: '"Watch out for" é um phrasal verb que significa ficar atento a algo ou alguém.' },
+  };
+
+  function answerFor(prompt) {
+    const m = prompt.match(/Selected text: «([^»]*)»/);
+    const text = m ? m[1] : prompt.slice(0, 60);
+    const hit = DICT[text.trim().toLowerCase()] || { translation: '[pt] ' + text, chunks: [[text, '[pt] ' + text]], note: '' };
+    const obj = { translation: hit.translation, chunks: hit.chunks.map(([source, target]) => ({ source, target })), note: hit.note };
+    const json = JSON.stringify(obj);
+    if (mode === 'fenced') return 'Aqui está a tradução:\n```json\n' + json + '\n```';
+    if (mode === 'prose') return 'Claro! ' + json + ' Qualquer dúvida, é só falar.';
+    if (mode === 'plain') return hit.translation;
+    if (mode === 'limit') return "You've reached our limit of messages per hour. Please try again later.";
+    return json;
+  }
+
+  if (mode === 'loggedout') {
+    document.getElementById('composer').innerHTML =
+      '<div style="padding:40px;text-align:center"><h2>Welcome back</h2><button data-testid="login-button">Log in</button></div>';
+    return;
+  }
+
+  const composer = document.getElementById('composer');
+  composer.innerHTML =
+    '<form id="form">' +
+    '<div id="prompt-textarea" class="ProseMirror" contenteditable="true" data-virtualkeyboard="true"><p></p></div>' +
+    '<button type="button" data-testid="send-button" aria-label="Send prompt" disabled>Send</button>' +
+    '</form>';
+  const editor = document.getElementById('prompt-textarea');
+  const form = document.getElementById('form');
+  const thread = document.getElementById('thread');
+  let turn = 0;
+
+  function sendButton() { return form.querySelector('[data-testid="send-button"]'); }
+  editor.addEventListener('input', () => {
+    const btn = sendButton();
+    if (btn) btn.disabled = !editor.innerText.trim();
+  });
+
+  function setStop(on) {
+    const current = form.querySelector('[data-testid="send-button"], [data-testid="stop-button"]');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    if (on) { btn.dataset.testid = 'stop-button'; btn.setAttribute('aria-label', 'Stop streaming'); btn.textContent = 'Stop'; }
+    else { btn.dataset.testid = 'send-button'; btn.setAttribute('aria-label', 'Send prompt'); btn.textContent = 'Send'; btn.disabled = true; btn.addEventListener('click', onSend); }
+    current.replaceWith(btn);
+  }
+
+  function onSend() {
+    const prompt = editor.innerText.trim();
+    if (!prompt) return;
+    window.__mock.sentPrompts.push(prompt);
+    editor.innerHTML = '<p></p>';
+    const userTurn = document.createElement('article');
+    userTurn.dataset.testid = 'conversation-turn-' + ++turn;
+    userTurn.innerHTML = '<div data-message-author-role="user"></div>';
+    userTurn.firstChild.textContent = prompt;
+    thread.appendChild(userTurn);
+    setStop(true);
+
+    const reply = answerFor(prompt);
+    window.__mock.assistantReplies.push(reply);
+    setTimeout(() => {
+      const art = document.createElement('article');
+      art.dataset.testid = 'conversation-turn-' + ++turn;
+      const msg = document.createElement('div');
+      msg.setAttribute('data-message-author-role', 'assistant');
+      msg.setAttribute('data-message-id', 'm' + turn);
+      const md = document.createElement('div');
+      md.className = 'markdown prose';
+      msg.appendChild(md);
+      art.appendChild(msg);
+      thread.appendChild(art);
+      // transmite em pedaços, como a interface real
+      let i = 0;
+      const step = Math.max(8, Math.ceil(reply.length / 12));
+      const iv = setInterval(() => {
+        i += step;
+        md.textContent = reply.slice(0, i);
+        if (i >= reply.length) {
+          clearInterval(iv);
+          md.textContent = reply;
+          setStop(false);
+        }
+      }, 40);
+    }, delay);
+  }
+  sendButton().addEventListener('click', onSend);
+})();
+</script>
+</body>
+</html>
