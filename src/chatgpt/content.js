@@ -40,6 +40,15 @@
       'a[href*="auth.openai.com"]',
     ],
     assistant: '[data-message-author-role="assistant"]',
+    fileInput: ['input[type="file"][accept*="image"]', 'input[type="file"][multiple]', 'input[type="file"]'],
+    attachment: [
+      'form img[alt*="Uploaded" i]',
+      'form img[alt*="Imagem" i]',
+      'form img[src^="blob:"]',
+      'form [data-testid*="attachment" i]',
+      'form button[aria-label*="Remove" i]',
+      'form button[aria-label*="Remover" i]',
+    ],
   };
 
   const LIMIT_RE = /(reached (our|your|the) (message )?limit|limite de mensagens|atingiu (o|seu) limite|usage cap|too many requests)/i;
@@ -122,8 +131,8 @@
     }
   }
 
-  async function pressSend(composer) {
-    const deadline = Date.now() + 4000;
+  async function pressSend(composer, waitMs) {
+    const deadline = Date.now() + (waitMs || 4000);
     while (Date.now() < deadline) {
       const btn = query(SEL.send);
       if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
@@ -164,7 +173,62 @@
     }
   }
 
-  async function ask(prompt, timeoutMs) {
+  function composerForm(composer) {
+    return composer.closest('form') || document;
+  }
+
+  function attachmentCount(composer) {
+    const form = composerForm(composer);
+    let n = 0;
+    for (const sel of SEL.attachment) n += form.querySelectorAll(sel.replace(/^form /, '')).length;
+    return n;
+  }
+
+  async function dataUrlToFile(dataUrl, name) {
+    const blob = await (await fetch(dataUrl)).blob();
+    return new File([blob], name, { type: blob.type || 'image/png' });
+  }
+
+  async function waitFor(predicate, timeoutMs, stepMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const v = predicate();
+      if (v) return v;
+      await sleep(stepMs || 100);
+    }
+    return null;
+  }
+
+  // Anexa uma imagem ao compositor: primeiro simulando "colar", depois pelo input de arquivo.
+  async function attachImage(composer, dataUrl) {
+    const file = await dataUrlToFile(dataUrl, 'kindle-trecho.' + (dataUrl.startsWith('data:image/jpeg') ? 'jpg' : 'png'));
+    const before = attachmentCount(composer);
+    const dt = new DataTransfer();
+    dt.items.add(file);
+
+    composer.focus();
+    try {
+      composer.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    } catch (_) {
+      /* navegador sem ClipboardEvent construível */
+    }
+    if (await waitFor(() => attachmentCount(composer) > before, 2500)) return 'paste';
+
+    const input = query(SEL.fileInput, composerForm(composer)) || query(SEL.fileInput);
+    if (input) {
+      try {
+        input.files = dt.files;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (_) {
+        /* input protegido */
+      }
+      if (await waitFor(() => attachmentCount(composer) > before, 4000)) return 'input';
+    }
+    return null;
+  }
+
+  async function ask(prompt, timeoutMs, image) {
     const startedAt = Date.now();
     const composer = query(SEL.composer);
     if (!composer) return { ok: false, code: status() === 'login' ? 'LOGIN' : 'NO_COMPOSER' };
@@ -172,11 +236,23 @@
     const before = assistantNodes();
     const lastBefore = before[before.length - 1] || null;
 
+    if (image) {
+      const how = await attachImage(composer, image);
+      if (!how) return { ok: false, code: 'UPLOAD', detail: 'não consegui anexar a imagem ao ChatGPT' };
+      reportProgress(startedAt, 'uploading');
+    }
+
     await insertPrompt(composer, prompt);
     if (!composerText(composer).includes(prompt.slice(0, 40))) {
       return { ok: false, code: 'NO_COMPOSER', detail: 'não consegui escrever no editor' };
     }
-    await pressSend(composer);
+    // Com imagem, o botão de enviar só habilita quando o upload termina.
+    const how = await pressSend(composer, image ? 45000 : 4000);
+    if (image && how === 'enter' && attachmentCount(composer) > 0 && composerText(composer).includes(prompt.slice(0, 40))) {
+      // O Enter não enviou: provavelmente o upload ainda não terminou.
+      await sleep(1500);
+      if (composerText(composer).includes(prompt.slice(0, 40))) return { ok: false, code: 'UPLOAD', detail: 'o upload da imagem não terminou' };
+    }
 
     let lastText = '';
     let stableSince = 0;
@@ -226,7 +302,7 @@
         return false;
       }
       busy = true;
-      ask(String(msg.prompt || ''), Number(msg.timeoutMs) || 120000)
+      ask(String(msg.prompt || ''), Number(msg.timeoutMs) || 120000, typeof msg.image === 'string' ? msg.image : null)
         .then(sendResponse, (err) => sendResponse({ ok: false, code: 'UNKNOWN', detail: String((err && err.message) || err) }))
         .finally(() => {
           busy = false;

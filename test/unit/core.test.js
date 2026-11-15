@@ -115,3 +115,33 @@ test('errorMessage tem texto para códigos conhecidos e fallback', () => {
   assert.match(KT.errorMessage('LOGIN'), /logado/);
   assert.equal(KT.errorMessage('???'), KT.ERROR_MESSAGES.UNKNOWN);
 });
+
+test('buildImagePrompt descreve o layout da imagem e pede source + JSON', () => {
+  const p = KT.buildImagePrompt({ targetLanguage: 'Português (Brasil)', hasContext: true });
+  assert.match(p, /attached image/);
+  assert.match(p, /TOP part/);
+  assert.match(p, /BOTTOM part/);
+  assert.match(p, /"source"/);
+  assert.match(p, /Target language: Português \(Brasil\)/);
+  const noCtx = KT.buildImagePrompt({ hasContext: false, includeNote: false });
+  assert.doesNotMatch(noCtx, /BOTTOM part/);
+  assert.match(noCtx, /"note": ""\}/);
+});
+
+test('hashString é estável e distingue conteúdos', () => {
+  assert.equal(KT.hashString('data:image/png;base64,AAAA'), KT.hashString('data:image/png;base64,AAAA'));
+  assert.notEqual(KT.hashString('data:image/png;base64,AAAA'), KT.hashString('data:image/png;base64,AAAB'));
+  assert.match(KT.hashString('x'), /^[0-9a-f]{8}-[0-9a-z]+$/);
+});
+
+test('parseResponse devolve o campo source quando presente', () => {
+  const r = KT.parseResponse('{"source":"on the table","translation":"em pauta","chunks":[],"note":""}');
+  assert.equal(r.source, 'on the table');
+  assert.equal(KT.parseResponse('{"translation":"x"}').source, '');
+  assert.equal(KT.parseResponse('texto puro').source, '');
+});
+
+test('mergeSettings mantém includePageContext por padrão e aceita desligar', () => {
+  assert.equal(KT.mergeSettings(null).includePageContext, true);
+  assert.equal(KT.mergeSettings({ includePageContext: false }).includePageContext, false);
+});

@@ -53,12 +53,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       getSettings().then(sendResponse, () => sendResponse(KT.mergeSettings(null)));
       return true;
 
-    case KT.MSG.TRANSLATE: {
+    case KT.MSG.TRANSLATE:
+    case KT.MSG.TRANSLATE_IMAGE: {
       const job = () => translate(msg, sender);
       const promise = enqueue(job);
       promise.then(sendResponse, (err) => sendResponse(toErrorResponse(err)));
       return true;
     }
+
+    case KT.MSG.CAPTURE_TAB:
+      captureTab(sender).then(sendResponse, (e) => sendResponse(toErrorResponse(e)));
+      return true;
+
+    case KT.MSG.DIAGNOSE:
+      diagnose(msg.tabId).then(sendResponse, (e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
+      return true;
 
     case KT.MSG.PROGRESS: {
       // Vindo do content script do ChatGPT: repassa para quem pediu.
@@ -102,26 +111,32 @@ function toErrorResponse(err) {
 async function translate(msg, sender) {
   const started = Date.now();
   const settings = await getSettings();
-  const text = KT.normalizeWhitespace(msg.text);
-  if (!text) throw new KTError('UNKNOWN', 'seleção vazia');
-  if (text.length > settings.maxSelectionChars) throw new KTError('TOO_LONG');
+  const isImage = msg.type === KT.MSG.TRANSLATE_IMAGE;
+  let text = '';
+  let key;
+  if (isImage) {
+    if (typeof msg.image !== 'string' || !msg.image.startsWith('data:image/')) throw new KTError('UNKNOWN', 'imagem inválida');
+    key = KT.cacheKey('img:' + KT.hashString(msg.image), settings.targetLanguage);
+  } else {
+    text = KT.normalizeWhitespace(msg.text);
+    if (!text) throw new KTError('UNKNOWN', 'seleção vazia');
+    if (text.length > settings.maxSelectionChars) throw new KTError('TOO_LONG');
+    key = KT.cacheKey(text, settings.targetLanguage);
+  }
 
-  const key = KT.cacheKey(text, settings.targetLanguage);
   const cached = await readCache(key);
   if (cached) return { ok: true, result: cached, cached: true, elapsedMs: 0 };
 
   state.current = { requestId: msg.requestId, tabId: sender.tab ? sender.tab.id : null, frameId: sender.frameId || 0 };
   try {
-    const prompt = KT.buildPrompt({
-      text,
-      context: msg.context,
-      targetLanguage: settings.targetLanguage,
-      includeNote: settings.includeNote,
-    });
+    const prompt = isImage
+      ? KT.buildImagePrompt({ targetLanguage: settings.targetLanguage, includeNote: settings.includeNote, hasContext: !!msg.hasContext })
+      : KT.buildPrompt({ text, context: msg.context, targetLanguage: settings.targetLanguage, includeNote: settings.includeNote });
     const tabId = await ensureChatgptTab(settings);
     const reply = await chrome.tabs.sendMessage(tabId, {
       type: KT.MSG.CHATGPT_ASK,
       prompt,
+      image: isImage ? msg.image : null,
       timeoutMs: settings.responseTimeoutMs,
     });
     if (!reply || !reply.ok) throw new KTError((reply && reply.code) || 'UNKNOWN', reply && reply.detail);
@@ -213,6 +228,50 @@ async function openChatgptTabForUser() {
   state.chatgptTabId = created.id;
   state.chatgptTabUrl = settings.chatgptUrl;
   state.turns = 0;
+}
+
+async function captureTab(sender) {
+  const windowId = sender.tab ? sender.tab.windowId : chrome.windows.WINDOW_ID_CURRENT;
+  const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+  return { ok: true, dataUrl };
+}
+
+// Roda dentro de cada frame da aba do Kindle (mundo isolado) e relata o que encontrou.
+function diagnoseFrame() {
+  const q = (sel) => document.querySelectorAll(sel).length;
+  const img = document.querySelector('.kg-full-page-img img');
+  return {
+    url: location.href.slice(0, 120),
+    contentScript: !!document.documentElement.getAttribute('data-kt-ready'),
+    pageImage: img ? { natural: img.naturalWidth + 'x' + img.naturalHeight, client: img.clientWidth + 'x' + img.clientHeight, src: (img.currentSrc || img.src || '').slice(0, 40) } : null,
+    wordBoxes: q('.kg-client-dictionary'),
+    selectionBoxes: q('.kg-selection'),
+    root: q('#root'),
+    fullpageApp: q('#kr-fullpage-app'),
+    iframes: q('iframe'),
+    textChars: (document.body && document.body.innerText ? document.body.innerText.length : 0),
+    selectionText: String(document.getSelection && document.getSelection()).slice(0, 80),
+  };
+}
+
+async function diagnose(tabId) {
+  const manifest = chrome.runtime.getManifest();
+  const patterns = manifest.content_scripts[0].matches;
+  let tabs = [];
+  if (tabId != null) tabs = [await chrome.tabs.get(tabId)];
+  else tabs = await chrome.tabs.query({ url: patterns });
+  const report = [];
+  for (const tab of tabs) {
+    let frames = [];
+    try {
+      const results = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: diagnoseFrame });
+      frames = results.map((r) => Object.assign({ frameId: r.frameId }, r.result));
+    } catch (e) {
+      frames = [{ error: String((e && e.message) || e) }];
+    }
+    report.push({ tabId: tab.id, title: tab.title, url: tab.url, frames });
+  }
+  return { ok: true, patterns, tabs: report, extensionVersion: manifest.version };
 }
 
 async function readCache(key) {

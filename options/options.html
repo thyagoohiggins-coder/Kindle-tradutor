@@ -33,6 +33,7 @@
     </div>
 
     <label><input type="checkbox" id="includeNote"> Pedir nota explicativa sobre expressões e gírias</label>
+    <label><input type="checkbox" id="includePageContext"> Enviar a página inteira junto com o trecho (melhora a tradução; imagem maior)</label>
 
     <label>Idioma da voz (botão de ouvir)
       <select id="speechLang">
@@ -63,7 +64,13 @@
   </form>
 
   <div class="box">
-    <strong>Como usar:</strong> abra um livro no Kindle Web (read.amazon.com ou ler.amazon.com.br), selecione um trecho e clique em “Traduzir” (ou use Alt+T, ou o menu do botão direito).
+    <strong>Diagnóstico:</strong> com um livro aberto no Kindle Web, clique abaixo para ver se a extensão está ativa na aba e se encontrou a imagem da página e as caixas de seleção.
+    <div><button type="button" id="diagnose" style="margin-top:10px;background:#555">Diagnosticar aba do Kindle</button></div>
+    <pre id="diagnosis" style="white-space:pre-wrap;font-size:12px;margin:10px 0 0;max-height:320px;overflow:auto"></pre>
+  </div>
+
+  <div class="box">
+    <strong>Como usar:</strong> abra um livro no Kindle Web (read.amazon.com ou ler.amazon.com.br), arraste sobre um trecho e clique em “Traduzir” (ou dê dois cliques em uma palavra, use Alt+T, ou o menu do botão direito). Com Alt+T sem nada selecionado você pode desenhar um retângulo sobre o trecho.
     A extensão abre uma aba do ChatGPT em segundo plano usando a sua sessão; mantenha-se logado nela.
   </div>
   <script src="../src/shared/core.js"></script>

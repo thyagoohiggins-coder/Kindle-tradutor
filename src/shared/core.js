@@ -10,7 +10,10 @@
   'use strict';
 
   const MSG = Object.freeze({
-    TRANSLATE: 'kt:translate', // kindle -> background
+    TRANSLATE: 'kt:translate', // kindle -> background (texto)
+    TRANSLATE_IMAGE: 'kt:translate-image', // kindle -> background (recorte da página)
+    CAPTURE_TAB: 'kt:capture-tab', // kindle -> background (captura da aba visível)
+    DIAGNOSE: 'kt:diagnose', // opções -> background -> frames do Kindle
     TRANSLATE_SELECTION: 'kt:translate-selection', // background -> kindle (menu de contexto)
     PROGRESS: 'kt:progress', // chatgpt -> background -> kindle
     GET_SETTINGS: 'kt:get-settings', // qualquer -> background
@@ -25,6 +28,7 @@
     chatgptUrl: 'https://chatgpt.com/?temporary-chat=true',
     trigger: 'button', // 'button' | 'auto'
     includeNote: true,
+    includePageContext: true, // envia a página inteira junto com o recorte (imagem)
     maxSelectionChars: 1500,
     responseTimeoutMs: 120000,
     maxTurnsPerChat: 40,
@@ -37,6 +41,9 @@
     TIMEOUT: 'O ChatGPT demorou demais para responder. Tente de novo.',
     LIMIT: 'O ChatGPT informou que você atingiu o limite de mensagens. Aguarde um pouco ou troque de modelo na aba do ChatGPT.',
     EMPTY: 'O ChatGPT devolveu uma resposta vazia.',
+    UPLOAD: 'Não consegui anexar a imagem do trecho no ChatGPT. Verifique se a sua conta aceita envio de imagens e tente de novo.',
+    CAPTURE: 'Não consegui capturar a imagem da página do Kindle.',
+    NO_SELECTION: 'Nenhum trecho selecionado. Arraste sobre o texto do livro, ou use Alt+T e desenhe um retângulo.',
     TAB: 'Não consegui abrir ou alcançar a aba do ChatGPT.',
     TOO_LONG: 'Seleção longa demais. Selecione um trecho menor.',
     UNKNOWN: 'Algo deu errado ao traduzir.',
@@ -92,6 +99,55 @@
         'preserve names; use valid JSON with double quotes and escape quotes inside strings.'
     );
     return lines.join('\n');
+  }
+
+  function buildImagePrompt(opts) {
+    const targetLanguage = (opts && opts.targetLanguage) || DEFAULT_SETTINGS.targetLanguage;
+    const includeNote = !opts || opts.includeNote !== false;
+    const hasContext = !opts || opts.hasContext !== false;
+    const lines = [];
+    lines.push(
+      'You are a translation assistant embedded in an e-book reader. The attached image shows a passage the reader selected. ' +
+        'Reply with ONLY one JSON object: no markdown, no code fences, no commentary before or after it.'
+    );
+    lines.push('');
+    lines.push(
+      hasContext
+        ? 'Image layout: the TOP part shows, in black on white, exactly the words the reader selected. The BOTTOM part shows the whole page for context, with the selected words outlined in red. Translate ONLY the selected words; use the page just to understand them.'
+        : 'Image layout: it shows, in black on white, exactly the words the reader selected.'
+    );
+    lines.push('Target language: ' + targetLanguage);
+    lines.push('');
+    lines.push('Return exactly this JSON shape:');
+    lines.push(
+      '{"source": "the selected words transcribed exactly as written in the image (same language as the book)", ' +
+        '"translation": "natural translation of the selected words into the target language, as they read in context", ' +
+        '"chunks": [{"source": "a segment of the selected words", "target": "translation of that segment"}], ' +
+        '"note": ' +
+        (includeNote
+          ? '"if the selection contains an idiom, phrasal verb, slang or a construction a language learner may not know, explain it briefly in the target language (1 or 2 sentences); otherwise an empty string"}'
+          : '""}')
+    );
+    lines.push('');
+    lines.push(
+      'Rules: the chunks must cover the whole selected text, in order, split into meaningful units ' +
+        '(keep idioms, phrasal verbs and fixed expressions together as one chunk); ' +
+        'for a single word or a very short phrase use exactly one chunk; ' +
+        'keep the original register, including slang and profanity; preserve names; ' +
+        'if the selection starts or ends in the middle of a sentence, still translate only the selected words; ' +
+        'use valid JSON with double quotes and escape quotes inside strings.'
+    );
+    return lines.join('\n');
+  }
+
+  // Hash curto e estável (FNV-1a 32 bits) para chaves de cache de imagens.
+  function hashString(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return ('0000000' + h.toString(16)).slice(-8) + '-' + str.length.toString(36);
   }
 
   function stripFences(raw) {
@@ -176,8 +232,10 @@
       const translation = normalizeWhitespace(data.translation || data.traducao || data.tradução || '');
       const chunks = normalizeChunks(data.chunks || data.segments || data.parts);
       const note = normalizeWhitespace(data.note || data.notes || data.explanation || data.nota || '');
+      const source = normalizeWhitespace(data.source || data.original || data.transcription || '');
       if (translation || chunks.length) {
         return {
+          source,
           translation: translation || chunks.map((c) => c.target).join(' '),
           chunks,
           note,
@@ -185,7 +243,7 @@
         };
       }
     }
-    return { translation: normalizeWhitespace(text), chunks: [], note: '', parsed: false };
+    return { source: '', translation: normalizeWhitespace(text), chunks: [], note: '', parsed: false };
   }
 
   function cacheKey(text, targetLanguage) {
@@ -208,6 +266,7 @@
     out.maxTurnsPerChat = Number(out.maxTurnsPerChat) || DEFAULT_SETTINGS.maxTurnsPerChat;
     out.trigger = out.trigger === 'auto' ? 'auto' : 'button';
     out.includeNote = out.includeNote !== false && out.includeNote !== 'false';
+    out.includePageContext = out.includePageContext !== false && out.includePageContext !== 'false';
     return out;
   }
 
@@ -242,6 +301,8 @@
     ERROR_MESSAGES,
     normalizeWhitespace,
     buildPrompt,
+    buildImagePrompt,
+    hashString,
     parseResponse,
     extractJsonObject,
     cacheKey,

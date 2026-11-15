@@ -20,7 +20,8 @@
   const params = new URLSearchParams(location.search);
   const mode = params.get('mode') || 'json';
   const delay = Number(params.get('delay') || 600);
-  window.__mock = { mode, sentPrompts: [], assistantReplies: [] };
+  const imageText = params.get('imageText') || 'nor was it a disease either';
+  window.__mock = { mode, sentPrompts: [], assistantReplies: [], images: [], imagesPerPrompt: [] };
 
   // Dicionário determinístico para as asserções do teste.
   const DICT = {
@@ -32,11 +33,13 @@
     'watch out for that one, though.': { translation: 'Mas tome cuidado com aquela ali.', chunks: [['Watch out for', 'Tome cuidado com'], ['that one', 'aquela ali'], ['though', 'mas / porém']], note: '"Watch out for" é um phrasal verb que significa ficar atento a algo ou alguém.' },
   };
 
-  function answerFor(prompt) {
+  function answerFor(prompt, hasImage) {
     const m = prompt.match(/Selected text: «([^»]*)»/);
-    const text = m ? m[1] : prompt.slice(0, 60);
+    const isImagePrompt = /attached image/i.test(prompt);
+    const text = m ? m[1] : isImagePrompt && hasImage ? imageText : prompt.slice(0, 60);
     const hit = DICT[text.trim().toLowerCase()] || { translation: '[pt] ' + text, chunks: [[text, '[pt] ' + text]], note: '' };
     const obj = { translation: hit.translation, chunks: hit.chunks.map(([source, target]) => ({ source, target })), note: hit.note };
+    if (isImagePrompt) obj.source = hasImage ? text : '(sem imagem anexada)';
     const json = JSON.stringify(obj);
     if (mode === 'fenced') return 'Aqui está a tradução:\n```json\n' + json + '\n```';
     if (mode === 'prose') return 'Claro! ' + json + ' Qualquer dúvida, é só falar.';
@@ -54,7 +57,9 @@
   const composer = document.getElementById('composer');
   composer.innerHTML =
     '<form id="form">' +
+    '<div id="attachments"></div>' +
     '<div id="prompt-textarea" class="ProseMirror" contenteditable="true" data-virtualkeyboard="true"><p></p></div>' +
+    '<input type="file" id="file-input" multiple accept="image/*,.pdf" style="display:none">' +
     '<button type="button" data-testid="send-button" aria-label="Send prompt" disabled>Send</button>' +
     '</form>';
   const editor = document.getElementById('prompt-textarea');
@@ -63,9 +68,46 @@
   let turn = 0;
 
   function sendButton() { return form.querySelector('[data-testid="send-button"]'); }
-  editor.addEventListener('input', () => {
+  let uploading = 0;
+  let pendingImages = [];
+  function refreshSend() {
     const btn = sendButton();
-    if (btn) btn.disabled = !editor.innerText.trim();
+    if (btn) btn.disabled = uploading > 0 || (!editor.innerText.trim() && pendingImages.length === 0);
+  }
+  editor.addEventListener('input', refreshSend);
+
+  // Upload simulado: pré-visualização + botão desabilitado enquanto "envia".
+  function acceptFiles(files, via) {
+    if (mode === 'noupload') return;
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+      uploading++;
+      refreshSend();
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        const img = new Image();
+        img.onload = () => {
+          window.__mock.images.push({ dataUrl, width: img.naturalWidth, height: img.naturalHeight, type: file.type, name: file.name, via });
+          const preview = document.createElement('img');
+          preview.alt = 'Uploaded image';
+          preview.src = dataUrl;
+          preview.style.cssText = 'height:48px;border:1px solid #ccc;margin:4px';
+          document.getElementById('attachments').appendChild(preview);
+          pendingImages.push(dataUrl);
+          setTimeout(() => { uploading--; refreshSend(); }, 400);
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+  editor.addEventListener('paste', (e) => {
+    const files = e.clipboardData && e.clipboardData.files;
+    if (files && files.length) { e.preventDefault(); acceptFiles(Array.from(files), 'paste'); }
+  });
+  document.getElementById('file-input').addEventListener('change', (e) => {
+    acceptFiles(Array.from(e.target.files || []), 'input');
   });
 
   function setStop(on) {
@@ -79,8 +121,13 @@
 
   function onSend() {
     const prompt = editor.innerText.trim();
-    if (!prompt) return;
+    if (!prompt && !pendingImages.length) return;
+    if (uploading > 0) return;
     window.__mock.sentPrompts.push(prompt);
+    window.__mock.imagesPerPrompt.push(pendingImages.length);
+    const hadImage = pendingImages.length > 0;
+    pendingImages = [];
+    document.getElementById('attachments').innerHTML = '';
     editor.innerHTML = '<p></p>';
     const userTurn = document.createElement('article');
     userTurn.dataset.testid = 'conversation-turn-' + ++turn;
@@ -89,7 +136,7 @@
     thread.appendChild(userTurn);
     setStop(true);
 
-    const reply = answerFor(prompt);
+    const reply = answerFor(prompt, hadImage);
     window.__mock.assistantReplies.push(reply);
     setTimeout(() => {
       const art = document.createElement('article');

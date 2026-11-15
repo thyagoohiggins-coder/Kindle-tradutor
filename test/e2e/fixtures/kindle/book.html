@@ -2,18 +2,130 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>book</title>
+<title>book (imagem)</title>
 <style>
-  body { margin: 0; padding: 24px 40px; background: #000; color: #d8d8d8; font: 20px/1.6 Georgia, serif; column-count: 2; column-gap: 60px; }
-  p { margin: 0 0 0.3em; text-indent: 1.5em; }
+  html, body { margin: 0; background: #000; height: 100%; overflow: hidden; }
+  #kr-fullpage-app, #root { position: relative; width: 100%; height: 100%; }
+  .kg-full-page-img { position: absolute; left: 40px; top: 20px; }
+  .kg-full-page-img img { display: block; user-select: none; -webkit-user-drag: none; }
+  .kg-client-interaction-layer { position: absolute; left: 40px; top: 20px; }
+  .kg-client-interaction-layer > div { position: absolute; top: 0; height: 100%; }
+  .kg-client-dictionary { position: absolute; cursor: text; }
+  .kg-selection { position: absolute; background: rgba(120, 170, 255, 0.35); pointer-events: none; }
 </style>
 </head>
 <body>
-  <p id="p1">I stand there staring at her back as she walks away, not quite sure what just happened.</p>
-  <p id="p2">“Reid, you okay?” Julian asks. I tear my eyes from the girl’s swishing dress and see him staring in her direction too, with a narrow-eyed look. He knows how difficult it is for me to deal with the girls in this school. “Who was that chick?”</p>
-  <p id="p3">I shake my head. “<span id="s1">I have no idea.</span> She said Atlas needed to talk to me.”</p>
-  <p id="p4">Atlas smirks. “Nope, I never said that.” He chuckles. “<span id="s2">Watch out for that one, though.</span> She’s worse than my mom when it comes to getting into other people’s business.”</p>
-  <p id="p5">“Is nuclear power still <span id="s3">on the table</span>?”</p>
-  <p id="p6">It seemed like he had suffered a head injury, <span id="s4">nor was it a disease either</span>.</p>
+<div id="kr-fullpage-app">
+  <div id="root">
+    <div class="kg-full-page-img"><img id="page" alt=""></div>
+    <div class="kg-client-interaction-layer" id="layer"></div>
+  </div>
+</div>
+<script>
+// Simula o leitor Kindle Web atual: a página é UMA imagem; sobre ela há caixas de palavras
+// sem texto (.kg-client-dictionary) e, ao arrastar, retângulos de seleção (.kg-selection).
+(function () {
+  const DPR = 2;
+  const W = 1100, H = 620, COLS = 2, GAP = 60, PAD = 30, LINE = 36, FONT = '22px Georgia, serif';
+  const PARAS = [
+    'I stand there staring at her back as she walks away, not quite sure what just happened.',
+    '“Reid, you okay?” Julian asks. I tear my eyes from the girl’s swishing dress and see him staring in her direction too, with a narrow-eyed look. He knows how difficult it is for me to deal with the girls in this school. “Who was that chick?”',
+    'I shake my head. “I have no idea. She said Atlas needed to talk to me.”',
+    'Atlas smirks. “Nope, I never said that.” He chuckles. “Watch out for that one, though. She’s worse than my mom when it comes to getting into other people’s business.”',
+    '“Is nuclear power still on the table?”',
+    'It seemed like he had suffered a head injury, nor was it a disease either.',
+  ];
+  const canvas = document.createElement('canvas');
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(DPR, DPR);
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#d8d8d8'; ctx.font = FONT; ctx.textBaseline = 'alphabetic';
+  const colW = (W - PAD * 2 - GAP) / COLS;
+  const words = []; // {text, left, top, width, height, col, line}
+  let col = 0, y = PAD + LINE;
+  for (const para of PARAS) {
+    let x = PAD + col * (colW + GAP) + 24; // recuo
+    for (const word of para.split(' ')) {
+      const w = ctx.measureText(word).width;
+      const space = ctx.measureText(' ').width;
+      if (x + w > PAD + col * (colW + GAP) + colW) {
+        y += LINE; x = PAD + col * (colW + GAP);
+        if (y > H - PAD) { col++; y = PAD + LINE; x = PAD + col * (colW + GAP); }
+      }
+      ctx.fillText(word, x, y);
+      words.push({ text: word, left: x, top: y - 24, width: w, height: 30, col });
+      x += w + space;
+    }
+    y += LINE;
+    if (y > H - PAD) { col++; y = PAD + LINE; }
+  }
+  const img = document.getElementById('page');
+  img.width = W; img.height = H;
+  canvas.toBlob((blob) => { img.src = URL.createObjectURL(blob); }, 'image/png');
+
+  const layer = document.getElementById('layer');
+  layer.style.width = W + 'px'; layer.style.height = H + 'px';
+  for (let c = 0; c < COLS; c++) {
+    const d = document.createElement('div');
+    d.style.left = (PAD + c * (colW + GAP)) + 'px';
+    d.style.width = colW + 'px';
+    layer.appendChild(d);
+  }
+  const boxes = words.map((w, i) => {
+    const s = document.createElement('span');
+    s.className = 'kg-client-dictionary';
+    s.dataset.index = i;
+    s.style.left = w.left + 'px'; s.style.top = w.top + 'px';
+    s.style.width = w.width + 'px'; s.style.height = w.height + 'px';
+    layer.appendChild(s);
+    return s;
+  });
+
+  function clearSelection() { layer.querySelectorAll('.kg-selection').forEach((e) => e.remove()); }
+  function selectRange(a, b) {
+    clearSelection();
+    const [from, to] = a <= b ? [a, b] : [b, a];
+    // um retângulo por linha, como o leitor real
+    let cur = null;
+    for (let i = from; i <= to; i++) {
+      const w = words[i];
+      if (cur && cur.top === w.top) { cur.right = w.left + w.width; }
+      else { if (cur) emit(cur); cur = { left: w.left, top: w.top, right: w.left + w.width, height: w.height }; }
+    }
+    if (cur) emit(cur);
+    function emit(r) {
+      const s = document.createElement('span');
+      s.className = 'kg-selection';
+      s.style.left = r.left + 'px'; s.style.top = r.top + 'px';
+      s.style.width = (r.right - r.left) + 'px'; s.style.height = r.height + 'px';
+      layer.appendChild(s);
+    }
+  }
+  let anchor = null;
+  layer.addEventListener('mousedown', (e) => {
+    const t = e.target.closest('.kg-client-dictionary');
+    clearSelection();
+    anchor = t ? Number(t.dataset.index) : null;
+    e.preventDefault();
+  });
+  layer.addEventListener('mousemove', (e) => {
+    if (anchor == null) return;
+    const t = e.target.closest('.kg-client-dictionary');
+    if (t) selectRange(anchor, Number(t.dataset.index));
+  });
+  document.addEventListener('mouseup', () => { anchor = null; });
+
+  const norm = (t) => t.replace(/^[“”"‘’'(\[]+|[“”"‘’'.,;:!?)\]]+$/g, '').toLowerCase();
+  const findIndex = (text) => words.findIndex((w, i) => text.split(' ').every((t, k) => words[i + k] && norm(words[i + k].text) === norm(t)));
+  window.__kindleMock = {
+    words,
+    boxFor: (text) => { const i = findIndex(text); return i < 0 ? null : boxes[i].getBoundingClientRect(); },
+    rangeFor: (text) => { const i = findIndex(text); return i < 0 ? null : [i, i + text.split(' ').length - 1]; },
+    selectText: (text) => { const r = findIndex(text); if (r < 0) return false; selectRange(r, r + text.split(' ').length - 1); return true; },
+    selectionCount: () => layer.querySelectorAll('.kg-selection').length,
+  };
+})();
+</script>
 </body>
 </html>

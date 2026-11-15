@@ -55,6 +55,7 @@ async function saveOptions(context, extensionId, values) {
   if (values.trigger) await page.check(values.trigger === 'auto' ? '#triggerAuto' : '#triggerButton');
   if (values.targetLanguage !== undefined) await page.fill('#targetLanguage', values.targetLanguage);
   if (values.includeNote !== undefined) await page.setChecked('#includeNote', values.includeNote);
+  if (values.includePageContext !== undefined) await page.setChecked('#includePageContext', values.includePageContext);
   if (values.responseTimeout !== undefined) await page.fill('#responseTimeout', String(values.responseTimeout));
   await page.click('#save');
   await page.waitForFunction(() => document.getElementById('status').textContent === 'Salvo!');
@@ -78,10 +79,50 @@ async function selectElement(frame, selector) {
   await frame.evaluate(() => document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })));
 }
 
-function ui(frame) {
-  const bubble = frame.locator('#kt-host button[data-kt-role="bubble"]');
-  const card = frame.locator('#kt-host [data-kt-role="card"]');
+/** A interface é montada no documento de cima quando o iframe é da mesma origem. */
+function ui(frameOrPage) {
+  const page = typeof frameOrPage.page === 'function' ? frameOrPage.page() : frameOrPage;
+  const bubble = page.locator('.kt-host button[data-kt-role="bubble"]');
+  const card = page.locator('.kt-host [data-kt-role="card"]');
   return { bubble, card };
+}
+
+/** Arrasta o mouse sobre as palavras de `text` no Kindle simulado (página como imagem). */
+async function dragOverWords(frame, text) {
+  const page = frame.page();
+  const frameBox = await page.locator('iframe').first().boundingBox().catch(() => null);
+  const off = frameBox ? { x: frameBox.x, y: frameBox.y } : { x: 0, y: 0 };
+  const words = text.split(' ');
+  const first = await frame.evaluate((t) => { const b = window.__kindleMock.boxFor(t); return b && { x: b.x, y: b.y, w: b.width, h: b.height }; }, words[0]);
+  const range = await frame.evaluate((t) => window.__kindleMock.rangeFor(t), text);
+  if (!first || !range) throw new Error('texto não encontrado no mock: ' + text);
+  const last = await frame.evaluate((i) => { const b = document.querySelectorAll('.kg-client-dictionary')[i].getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; }, range[1]);
+  await page.mouse.move(off.x + first.x + 2, off.y + first.y + first.h / 2);
+  await page.mouse.down();
+  await page.mouse.move(off.x + first.x + first.w / 2, off.y + first.y + first.h / 2, { steps: 3 });
+  await page.mouse.move(off.x + last.x + last.w - 2, off.y + last.y + last.h / 2, { steps: 8 });
+  await page.mouse.up();
+}
+
+/** Lê a imagem recebida pelo ChatGPT simulado: dimensões e fração de pixels escuros no topo. */
+async function inspectImage(gptPage, index) {
+  return gptPage.evaluate(async (i) => {
+    const rec = window.__mock.images[i];
+    if (!rec) return null;
+    const img = new Image();
+    await new Promise((r) => { img.onload = r; img.src = rec.dataUrl; });
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    const x = c.getContext('2d');
+    x.drawImage(img, 0, 0);
+    const scan = (y0, y1) => {
+      const d = x.getImageData(0, y0, c.width, y1 - y0).data;
+      let dark = 0;
+      for (let k = 0; k < d.length; k += 4) if (d[k] < 100) dark++;
+      return dark / (d.length / 4);
+    };
+    return { width: img.naturalWidth, height: img.naturalHeight, type: rec.type, via: rec.via, darkTop: scan(0, Math.min(300, c.height)), darkAll: scan(0, c.height) };
+  }, index);
 }
 
 async function waitForPage(context, predicate, timeout = 15000) {
@@ -94,4 +135,4 @@ async function waitForPage(context, predicate, timeout = 15000) {
   throw new Error('page not found');
 }
 
-module.exports = { startServer, launchWithExtension, saveOptions, selectElement, ui, waitForPage };
+module.exports = { startServer, launchWithExtension, saveOptions, selectElement, ui, waitForPage, dragOverWords, inspectImage };

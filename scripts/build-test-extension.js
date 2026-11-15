@@ -19,6 +19,9 @@ function buildTestExtension(outDir) {
   manifest.name += ' (teste)';
   manifest.host_permissions = kindle.concat(chatgpt);
   manifest.content_scripts[0].matches = kindle;
+  // match_origin_as_fallback exige caminho "/*"; os mocks usam caminhos específicos.
+  delete manifest.content_scripts[0].match_origin_as_fallback;
+  manifest.content_scripts[0].match_about_blank = true;
   manifest.content_scripts[1].matches = chatgpt;
   fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
   return outDir;
